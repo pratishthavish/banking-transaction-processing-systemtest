@@ -1,4 +1,6 @@
+
 package service.impl;
+
 import domain.Account;
 import domain.Customer;
 import domain.Transaction;
@@ -10,121 +12,316 @@ import repository.AccountRepository;
 import repository.CustomerRepository;
 import repository.TransactionRepository;
 import service.BankService;
+import util.DBConnection;
 import util.Validation;
 
+import java.math.BigDecimal;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
-public class BankServiceImpl implements BankService{
+public class BankServiceImpl implements BankService {
 
-private final AccountRepository accountRepository=new AccountRepository();
-private final TransactionRepository transactionRepository=new TransactionRepository();
-private final CustomerRepository customerRepository=new CustomerRepository();
+    private final AccountRepository accountRepository = new AccountRepository();
+    private final TransactionRepository transactionRepository = new TransactionRepository();
+    private final CustomerRepository customerRepository = new CustomerRepository();
 
-private final Validation<String>validateName=name->{
-    if(name==null|| name.isBlank())throw new ValidationException("Name is required");
-};
-private final Validation<String>validateEmail=email->{
-    if(email==null|| !email.contains("@"))throw new ValidationException("Email is required");
-};
-private final Validation<String>validateType=type->{
-    if(type==null|| !(type.equalsIgnoreCase("SAVINGS")|| type.equalsIgnoreCase("CURRENT")))throw new ValidationException("Account Type must be SAVINGS OR CURRENT");
-};
-private final Validation<Double>validateAmountPositive=amount->{
-    if(amount==null|| amount<0)throw new ValidationException("Please enter vaild amount");
-};
+    private final Validation<String> validateName = name -> {
+        if (name == null || name.isBlank()) {
+            throw new ValidationException("Name is required");
+        }
+    };
 
+    private final Validation<String> validateEmail = email -> {
+        if (email == null || !email.contains("@")) {
+            throw new ValidationException("Valid email is required");
+        }
+    };
+
+    private final Validation<String> validateType = type -> {
+        if (type == null ||
+                !(type.equalsIgnoreCase("SAVINGS") ||
+                        type.equalsIgnoreCase("CURRENT"))) {
+            throw new ValidationException("Account Type must be SAVINGS or CURRENT");
+        }
+    };
+
+    private BigDecimal validateAmount(Double amount) {
+
+        if (amount == null || !Double.isFinite(amount) || amount <= 0) {
+            throw new ValidationException("Amount must be greater than zero");
+        }
+
+        return BigDecimal.valueOf(amount).setScale(2);
+    }
 
     @Override
     public String openAccount(String name, String email, String accountType) {
 
-      validateName.validate(name);
-      validateEmail.validate(email);
-      validateType.validate(accountType);
+        validateName.validate(name);
+        validateEmail.validate(email);
+        validateType.validate(accountType);
 
-        String customerId= UUID.randomUUID().toString();
-       //String accountNumber= UUID.randomUUID().toString();
-        Customer c=new Customer(customerId,name,email);
-        customerRepository.save(c);
+        String customerId = UUID.randomUUID().toString();
+        Customer customer = new Customer(customerId, name, email);
+
+        customerRepository.save(customer);
+
         String accountNumber = getAccountNumber();
 
-        Account a = new Account(accountNumber, customerId, (double)0, accountType);
-        //save
-        accountRepository.save(a);
+        Account account = new Account(
+                accountNumber,
+                customerId,
+                0.0,
+                accountType.toUpperCase()
+        );
+
+        accountRepository.save(account);
+
         return accountNumber;
     }
 
     @Override
     public List<Account> listAccounts() {
-        return accountRepository.findAll().stream().sorted(Comparator.comparing(Account::getAccountNo)).collect(Collectors.toList());
-    }
 
-    @Override
-    public void deposit(String accountNumber, Double amount, String note) {
-        validateAmountPositive.validate(amount);
-        Account account=accountRepository.findByNumber(accountNumber)
-                .orElseThrow(()-> new AccountNotFoundException( "Account not found: "+accountNumber));
-        account.setBalance(account.getBalance()+amount);
-        Transaction transaction=new Transaction(account.getAccountNo(),amount,UUID.randomUUID().toString(), LocalDateTime.now(),note, Type.DEPOSIT);
-        transactionRepository.add(transaction);
-    }
-
-    @Override
-    public void withdraw(String accountNumber, Double amount, String withdrawal) {
-        Account account=accountRepository.findByNumber(accountNumber).orElseThrow(()-> new RuntimeException( "Account not found: "+accountNumber));
-        if(account.getBalance().compareTo(amount)<0)
-            throw new InsufficientFundException("insufficient Balance");
-        account.setBalance(account.getBalance()-amount);
-        Transaction transaction=new Transaction(account.getAccountNo(),amount,UUID.randomUUID().toString(), LocalDateTime.now(),withdrawal, Type.WITHDRAW);
-        transactionRepository.add(transaction);
-    }
-
-    @Override
-    public void transfer(String fromAcc, String toAcc, Double amount, String note ) {
-        if(fromAcc.equals(toAcc)){
-            throw new ValidationException("Cannot transfer to your own account");
-        }
-        Account from=accountRepository.findByNumber(fromAcc)
-                .orElseThrow(()-> new AccountNotFoundException( "Account not found: "+fromAcc));
-        Account to=accountRepository.findByNumber(toAcc)
-                .orElseThrow(()-> new AccountNotFoundException( "Account not found: "+toAcc));
-        if(from.getBalance().compareTo(amount)<0)
-            throw new InsufficientFundException("Insufficient Balance");
-        from.setBalance(from.getBalance()-amount);
-        to.setBalance(to.getBalance()+amount);
-        transactionRepository.add(new Transaction(from.getAccountNo(),amount,UUID.randomUUID().toString(), LocalDateTime.now(),note, Type.TRANSFER_OUT));
-        transactionRepository.add(new Transaction(to.getAccountNo(),amount,UUID.randomUUID().toString(), LocalDateTime.now(),note, Type.TRANSFER_IN));
-    }
-
-    @Override
-    public List<Transaction> getStatement(String account) {
-        return transactionRepository.findByAccount(account).stream().sorted(Comparator.comparing(Transaction::getTimestamp)).collect(Collectors.toList());
-    }
-
-    @Override
-    public List<Account> searchAccountByCustomerName(String q) {
-        String query=(q==null)?"":q.toLowerCase();
-       /* List<Account> result=new ArrayList<>();
-        for (Customer c: customerRepository.findAll()){
-            if(c.getName().toLowerCase().contains(query))
-                result.addAll(accountRepository.findByCustomerId(c.getId()));
-
-        }
-        result.sort(Comparator.comparing(Account::getAccountNo));
-        return result;*/
-        return customerRepository.findAll().stream()
-                .filter(c -> c.getName().toLowerCase().contains(query))
-                .flatMap(c -> accountRepository
-                        .findByCustomerId(c.getId())
-                        .stream())
+        return accountRepository.findAll()
+                .stream()
                 .sorted(Comparator.comparing(Account::getAccountNo))
                 .collect(Collectors.toList());
     }
 
+    @Override
+    public void deposit(String accountNumber, Double amount, String note) {
+
+        BigDecimal value = validateAmount(amount);
+
+        executeTransaction(connection -> {
+
+            Account account = getLockedAccount(connection, accountNumber);
+            validateActiveAccount(account);
+
+            BigDecimal newBalance =
+                    BigDecimal.valueOf(account.getBalance()).add(value);
+
+            accountRepository.updateBalance(
+                    connection, accountNumber, newBalance);
+
+            Transaction transaction = createTransaction(
+                    null,
+                    accountNumber,
+                    value,
+                    note,
+                    Type.DEPOSIT
+            );
+
+            transactionRepository.add(connection, transaction);
+        });
+    }
+
+    @Override
+    public void withdraw(String accountNumber, Double amount, String note) {
+
+        BigDecimal value = validateAmount(amount);
+
+        executeTransaction(connection -> {
+
+            Account account = getLockedAccount(connection, accountNumber);
+            validateActiveAccount(account);
+
+            BigDecimal currentBalance =
+                    BigDecimal.valueOf(account.getBalance());
+
+            if (currentBalance.compareTo(value) < 0) {
+                throw new InsufficientFundException("Insufficient balance");
+            }
+
+            BigDecimal newBalance = currentBalance.subtract(value);
+
+            accountRepository.updateBalance(
+                    connection, accountNumber, newBalance);
+
+            Transaction transaction = createTransaction(
+                    accountNumber,
+                    null,
+                    value,
+                    note,
+                    Type.WITHDRAW
+            );
+
+            transactionRepository.add(connection, transaction);
+        });
+    }
+
+    @Override
+    public void transfer(
+            String fromAccount,
+            String toAccount,
+            Double amount,
+            String note) {
+
+        if (fromAccount == null || toAccount == null ||
+                fromAccount.equals(toAccount)) {
+            throw new ValidationException(
+                    "Source and destination accounts must be different");
+        }
+
+        BigDecimal value = validateAmount(amount);
+
+        executeTransaction(connection -> {
+
+            String firstAccount = fromAccount.compareTo(toAccount) < 0
+                    ? fromAccount : toAccount;
+
+            String secondAccount = fromAccount.compareTo(toAccount) < 0
+                    ? toAccount : fromAccount;
+
+            Account first = getLockedAccount(connection, firstAccount);
+            Account second = getLockedAccount(connection, secondAccount);
+
+            Account source = fromAccount.equals(firstAccount) ? first : second;
+            Account destination = toAccount.equals(firstAccount) ? first : second;
+
+            validateActiveAccount(source);
+            validateActiveAccount(destination);
+
+            BigDecimal sourceBalance =
+                    BigDecimal.valueOf(source.getBalance());
+
+            if (sourceBalance.compareTo(value) < 0) {
+                throw new InsufficientFundException("Insufficient balance");
+            }
+
+            BigDecimal destinationBalance =
+                    BigDecimal.valueOf(destination.getBalance());
+
+            accountRepository.updateBalance(
+                    connection,
+                    fromAccount,
+                    sourceBalance.subtract(value)
+            );
+
+            accountRepository.updateBalance(
+                    connection,
+                    toAccount,
+                    destinationBalance.add(value)
+            );
+
+            Transaction transaction = createTransaction(
+                    fromAccount,
+                    toAccount,
+                    value,
+                    note,
+                    Type.TRANSFER
+            );
+
+            transactionRepository.add(connection, transaction);
+        });
+    }
+
+    @Override
+    public List<Transaction> getStatement(String account) {
+
+        return transactionRepository.findByAccount(account)
+                .stream()
+                .sorted(Comparator.comparing(Transaction::getTimestamp))
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<Account> searchAccountByCustomerName(String query) {
+
+        String search = query == null ? "" : query.toLowerCase();
+
+        return customerRepository.findAll()
+                .stream()
+                .filter(customer ->
+                        customer.getName().toLowerCase().contains(search))
+                .flatMap(customer ->
+                        accountRepository.findByCustomerId(customer.getId())
+                                .stream())
+                .sorted(Comparator.comparing(Account::getAccountNo))
+                .collect(Collectors.toList());
+    }
+
+    private Account getLockedAccount(
+            Connection connection, String accountNumber) throws SQLException {
+
+        return accountRepository.findByNumberForUpdate(connection, accountNumber)
+                .orElseThrow(() ->
+                        new AccountNotFoundException(
+                                "Account not found: " + accountNumber));
+    }
+
+    private void validateActiveAccount(Account account) {
+
+        if (!"ACTIVE".equalsIgnoreCase(account.getStatus())) {
+            throw new ValidationException("Account is not active");
+        }
+    }
+
+    private Transaction createTransaction(
+            String sourceAccount,
+            String destinationAccount,
+            BigDecimal amount,
+            String note,
+            Type type) {
+
+        String accountNumber = sourceAccount != null
+                ? sourceAccount : destinationAccount;
+
+        return new Transaction(
+                UUID.randomUUID().toString(),
+                UUID.randomUUID().toString(),
+                accountNumber,
+                sourceAccount,
+                destinationAccount,
+                amount,
+                LocalDateTime.now(),
+                note,
+                type,
+                "SUCCESS"
+        );
+    }
+
+    private void executeTransaction(SqlOperation operation) {
+
+        try (Connection connection = DBConnection.getConnection()) {
+
+            connection.setAutoCommit(false);
+
+            try {
+                operation.execute(connection);
+                connection.commit();
+
+            } catch (Exception e) {
+
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackError) {
+                    e.addSuppressed(rollbackError);
+                }
+
+                throw new RuntimeException(
+                        "Banking transaction failed: " + e.getMessage(), e);
+            }
+
+        } catch (SQLException e) {
+            throw new RuntimeException(
+                    "Database transaction failed", e);
+        }
+    }
+
+    @FunctionalInterface
+    private interface SqlOperation {
+        void execute(Connection connection) throws Exception;
+    }
 
     private String getAccountNumber() {
-        int size=accountRepository.findAll().size()+1;
-        return String.format("AC%06d",size);
+
+        int size = accountRepository.findAll().size() + 1;
+
+        return String.format("AC%06d", size);
     }
 }

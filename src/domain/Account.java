@@ -1,10 +1,27 @@
+
 package domain;
 
 public class Account {
+
     private String accountNo;
     private String customerId;
     private double balance;
     private String accountType;
+    private String status;
+
+    public Account(String accountNo, String customerId,
+                   Double balance, String accountType) {
+        this(accountNo, customerId, balance, accountType, "ACTIVE");
+    }
+
+    public Account(String accountNo, String customerId,
+                   Double balance, String accountType, String status) {
+        this.accountNo = accountNo;
+        this.customerId = customerId;
+        this.balance = balance;
+        this.accountType = accountType;
+        this.status = status;
+    }
 
     public String getAccountNo() {
         return accountNo;
@@ -38,12 +55,11 @@ public class Account {
         this.accountType = accountType;
     }
 
-    public Account(String accountNo, String customerId,
-                   Double balance, String accountType) {
-        this.accountNo = accountNo;
-        this.customerId = customerId;
-        this.balance = balance;
-        this.accountType = accountType;
+    public String getStatus() {
+        return status;
     }
 
+    public void setStatus(String status) {
+        this.status = status;
+    }
 }
