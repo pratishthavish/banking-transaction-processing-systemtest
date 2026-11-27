@@ -71,12 +71,7 @@ public class BankServiceImpl implements BankService {
 
         String accountNumber = getAccountNumber();
 
-        Account account = new Account(
-                accountNumber,
-                customerId,
-                0.0,
-                accountType.toUpperCase()
-        );
+        Account account = new Account(accountNumber, customerId, 0.0, accountType.toUpperCase());
 
         accountRepository.save(account);
 
@@ -86,52 +81,48 @@ public class BankServiceImpl implements BankService {
     @Override
     public List<Account> listAccounts() {
 
-        return accountRepository.findAll()
-                .stream()
-                .sorted(Comparator.comparing(Account::getAccountNo))
+        return accountRepository.findAll().stream().sorted(Comparator.comparing(Account::getAccountNo))
                 .collect(Collectors.toList());
     }
 
     @Override
-    public void deposit(String accountNumber, Double amount, String note) {
+    public void deposit(String accountNumber, Double amount, String note,String idempotencyKey) {
 
         BigDecimal value = validateAmount(amount);
 
         executeTransaction(connection -> {
 
+            Transaction existing = checkIdempotency(connection, idempotencyKey, null, accountNumber, value, note, Type.DEPOSIT);
+            if (existing != null) {
+                return;
+            }
+
             Account account = getLockedAccount(connection, accountNumber);
             validateActiveAccount(account);
 
-            BigDecimal newBalance =
-                    BigDecimal.valueOf(account.getBalance()).add(value);
+            BigDecimal newBalance = BigDecimal.valueOf(account.getBalance()).add(value);
 
-            accountRepository.updateBalance(
-                    connection, accountNumber, newBalance);
-
-            Transaction transaction = createTransaction(
-                    null,
-                    accountNumber,
-                    value,
-                    note,
-                    Type.DEPOSIT
-            );
-
+            accountRepository.updateBalance(connection, accountNumber, newBalance);
+            Transaction transaction = createTransaction(null, accountNumber, value, note, Type.DEPOSIT, idempotencyKey);
             transactionRepository.add(connection, transaction);
         });
     }
 
     @Override
-    public void withdraw(String accountNumber, Double amount, String note) {
+    public void withdraw(String accountNumber, Double amount, String note,String idempotencyKey) {
 
         BigDecimal value = validateAmount(amount);
 
         executeTransaction(connection -> {
+            Transaction existing = checkIdempotency(connection, idempotencyKey, accountNumber, null, value, note, Type.WITHDRAW);
+            if (existing != null) {
+                return;
+            }
 
             Account account = getLockedAccount(connection, accountNumber);
             validateActiveAccount(account);
 
-            BigDecimal currentBalance =
-                    BigDecimal.valueOf(account.getBalance());
+            BigDecimal currentBalance = BigDecimal.valueOf(account.getBalance());
 
             if (currentBalance.compareTo(value) < 0) {
                 throw new InsufficientFundException("Insufficient balance");
@@ -139,43 +130,29 @@ public class BankServiceImpl implements BankService {
 
             BigDecimal newBalance = currentBalance.subtract(value);
 
-            accountRepository.updateBalance(
-                    connection, accountNumber, newBalance);
-
-            Transaction transaction = createTransaction(
-                    accountNumber,
-                    null,
-                    value,
-                    note,
-                    Type.WITHDRAW
-            );
-
+            accountRepository.updateBalance(connection, accountNumber, newBalance);
+            Transaction transaction = createTransaction(accountNumber, null, value, note, Type.WITHDRAW,idempotencyKey);
             transactionRepository.add(connection, transaction);
         });
     }
 
     @Override
-    public void transfer(
-            String fromAccount,
-            String toAccount,
-            Double amount,
-            String note) {
+    public void transfer(String fromAccount, String toAccount, Double amount, String note,String idempotencyKey) {
 
-        if (fromAccount == null || toAccount == null ||
-                fromAccount.equals(toAccount)) {
-            throw new ValidationException(
-                    "Source and destination accounts must be different");
+        if (fromAccount == null || toAccount == null || fromAccount.equals(toAccount)) {
+            throw new ValidationException("Source and destination accounts must be different");
         }
 
         BigDecimal value = validateAmount(amount);
 
         executeTransaction(connection -> {
+            Transaction existing = checkIdempotency(connection, idempotencyKey, fromAccount, toAccount, value, note, Type.TRANSFER);
+            if (existing != null) {
+                return;
+            }
 
-            String firstAccount = fromAccount.compareTo(toAccount) < 0
-                    ? fromAccount : toAccount;
-
-            String secondAccount = fromAccount.compareTo(toAccount) < 0
-                    ? toAccount : fromAccount;
+            String firstAccount = fromAccount.compareTo(toAccount) < 0 ? fromAccount : toAccount;
+            String secondAccount = fromAccount.compareTo(toAccount) < 0 ? toAccount : fromAccount;
 
             Account first = getLockedAccount(connection, firstAccount);
             Account second = getLockedAccount(connection, secondAccount);
@@ -186,36 +163,17 @@ public class BankServiceImpl implements BankService {
             validateActiveAccount(source);
             validateActiveAccount(destination);
 
-            BigDecimal sourceBalance =
-                    BigDecimal.valueOf(source.getBalance());
+            BigDecimal sourceBalance = BigDecimal.valueOf(source.getBalance());
 
             if (sourceBalance.compareTo(value) < 0) {
                 throw new InsufficientFundException("Insufficient balance");
             }
 
-            BigDecimal destinationBalance =
-                    BigDecimal.valueOf(destination.getBalance());
+            BigDecimal destinationBalance = BigDecimal.valueOf(destination.getBalance());
 
-            accountRepository.updateBalance(
-                    connection,
-                    fromAccount,
-                    sourceBalance.subtract(value)
-            );
-
-            accountRepository.updateBalance(
-                    connection,
-                    toAccount,
-                    destinationBalance.add(value)
-            );
-
-            Transaction transaction = createTransaction(
-                    fromAccount,
-                    toAccount,
-                    value,
-                    note,
-                    Type.TRANSFER
-            );
-
+            accountRepository.updateBalance(connection, fromAccount, sourceBalance.subtract(value));
+            accountRepository.updateBalance(connection, toAccount, destinationBalance.add(value));
+            Transaction transaction = createTransaction(fromAccount, toAccount, value, note, Type.TRANSFER, idempotencyKey);
             transactionRepository.add(connection, transaction);
         });
     }
@@ -223,10 +181,8 @@ public class BankServiceImpl implements BankService {
     @Override
     public List<Transaction> getStatement(String account) {
 
-        return transactionRepository.findByAccount(account)
-                .stream()
-                .sorted(Comparator.comparing(Transaction::getTimestamp))
-                .collect(Collectors.toList());
+        return transactionRepository.findByAccount(account).stream()
+                .sorted(Comparator.comparing(Transaction::getTimestamp)).collect(Collectors.toList());
     }
 
     @Override
@@ -235,23 +191,14 @@ public class BankServiceImpl implements BankService {
         String search = query == null ? "" : query.toLowerCase();
 
         return customerRepository.findAll()
-                .stream()
-                .filter(customer ->
-                        customer.getName().toLowerCase().contains(search))
-                .flatMap(customer ->
-                        accountRepository.findByCustomerId(customer.getId())
-                                .stream())
-                .sorted(Comparator.comparing(Account::getAccountNo))
-                .collect(Collectors.toList());
+                .stream().filter(customer -> customer.getName().toLowerCase().contains(search))
+                .flatMap(customer -> accountRepository.findByCustomerId(customer.getId()).stream())
+                .sorted(Comparator.comparing(Account::getAccountNo)).collect(Collectors.toList());
     }
 
-    private Account getLockedAccount(
-            Connection connection, String accountNumber) throws SQLException {
-
+    private Account getLockedAccount(Connection connection, String accountNumber) throws SQLException {
         return accountRepository.findByNumberForUpdate(connection, accountNumber)
-                .orElseThrow(() ->
-                        new AccountNotFoundException(
-                                "Account not found: " + accountNumber));
+                .orElseThrow(() -> new AccountNotFoundException("Account not found: " + accountNumber));
     }
 
     private void validateActiveAccount(Account account) {
@@ -261,28 +208,31 @@ public class BankServiceImpl implements BankService {
         }
     }
 
-    private Transaction createTransaction(
-            String sourceAccount,
-            String destinationAccount,
-            BigDecimal amount,
-            String note,
-            Type type) {
+    private Transaction checkIdempotency(Connection connection, String idempotencyKey, String sourceAccount, String destinationAccount, BigDecimal amount, String note, Type type) throws SQLException {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new ValidationException("Idempotency key is required");
+        }
+        transactionRepository.lockIdempotencyKey(connection, idempotencyKey);
+        Transaction existing = transactionRepository.findByIdempotencyKey(connection, idempotencyKey);
 
-        String accountNumber = sourceAccount != null
-                ? sourceAccount : destinationAccount;
+        if (existing == null) {
+            return null;
+        }
+        boolean sameRequest = existing.getType() == type && Objects.equals(existing.getSourceAccountNumber(), sourceAccount
+        ) && Objects.equals(existing.getDestinationAccountNumber(), destinationAccount) && existing.getAmount().compareTo(amount) == 0 && Objects.equals(existing.getNote(), note);
 
-        return new Transaction(
-                UUID.randomUUID().toString(),
-                UUID.randomUUID().toString(),
-                accountNumber,
-                sourceAccount,
-                destinationAccount,
-                amount,
-                LocalDateTime.now(),
-                note,
-                type,
-                "SUCCESS"
-        );
+        if (!sameRequest) {
+            throw new ValidationException("Idempotency key has already been used for a different request");
+        }
+
+        return existing;
+    }
+
+
+    private Transaction createTransaction(String sourceAccount, String destinationAccount, BigDecimal amount, String note, Type type, String idempotencyKey) {
+        String accountNumber = sourceAccount != null ? sourceAccount : destinationAccount;
+        return new Transaction(UUID.randomUUID().toString(), idempotencyKey, accountNumber, sourceAccount,
+                destinationAccount, amount, LocalDateTime.now(), note, type, "SUCCESS");
     }
 
     private void executeTransaction(SqlOperation operation) {

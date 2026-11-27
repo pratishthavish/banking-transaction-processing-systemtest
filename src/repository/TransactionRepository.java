@@ -13,8 +13,7 @@ import java.util.List;
 
 public class TransactionRepository {
 
-    public void add(Connection connection, Transaction transaction)
-            throws SQLException {
+    public void add(Connection connection, Transaction transaction) throws SQLException {
 
         String sql = """
                 INSERT INTO bank_transaction (
@@ -45,6 +44,70 @@ public class TransactionRepository {
                     java.sql.Timestamp.valueOf(transaction.getTimestamp()));
 
             statement.executeUpdate();
+        }
+    }
+
+    public Transaction findByIdempotencyKey(Connection connection, String idempotencyKey) throws SQLException {
+
+        String sql = """
+            SELECT *
+            FROM bank_transaction
+            WHERE idempotency_key = ?
+            """;
+
+        try (PreparedStatement statement =
+                     connection.prepareStatement(sql)) {
+
+            statement.setString(1, idempotencyKey);
+
+            try (ResultSet resultSet = statement.executeQuery()) {
+
+                if (resultSet.next()) {
+
+                    String sourceAccount =
+                            resultSet.getString("source_account_no");
+
+                    String destinationAccount =
+                            resultSet.getString("destination_account_no");
+
+                    String accountNumber = sourceAccount != null
+                            ? sourceAccount
+                            : destinationAccount;
+
+                    return new Transaction(
+                            resultSet.getString("transaction_id"),
+                            resultSet.getString("idempotency_key"),
+                            accountNumber,
+                            sourceAccount,
+                            destinationAccount,
+                            resultSet.getBigDecimal("amount"),
+                            resultSet.getTimestamp("created_at").toLocalDateTime(),
+                            resultSet.getString("description"),
+                            Type.valueOf(
+                                    resultSet.getString("transaction_type")
+                            ),
+                            resultSet.getString("status")
+                    );
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public void lockIdempotencyKey(Connection connection, String idempotencyKey) throws SQLException {
+
+        String sql = """
+            SELECT pg_advisory_xact_lock(
+                hashtextextended(?, 0)
+            )
+            """;
+
+        try (PreparedStatement statement =
+                     connection.prepareStatement(sql)) {
+
+            statement.setString(1, idempotencyKey);
+            statement.execute();
         }
     }
 

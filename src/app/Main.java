@@ -49,7 +49,7 @@ public class Main {
         Double initial=Double.valueOf(amountStr);
         String accountNumber = bs.openAccount(name, email, type);
         if(initial>0)
-            bs.deposit(accountNumber,initial,"Initial Deposit");
+            bs.deposit(accountNumber,initial,"Initial Deposit", UUID.randomUUID().toString());
         System.out.println("Account opened: "+accountNumber);
     }
 
@@ -58,7 +58,7 @@ public class Main {
         String accountNumber=sc.nextLine().trim();
         System.out.println("Amount: ");
         Double amount=Double.valueOf(sc.nextLine().trim());
-        bs.deposit(accountNumber,amount,"Deposit");
+        bs.deposit(accountNumber,amount,"Deposit", UUID.randomUUID().toString());
         System.out.println("Deposited");
     }
 
@@ -67,7 +67,7 @@ public class Main {
         String accountNumber=sc.nextLine().trim();
         System.out.println("Amount: ");
         Double amount=Double.valueOf(sc.nextLine().trim());
-        bs.withdraw(accountNumber,amount,"Withdrawal");
+        bs.withdraw(accountNumber,amount,"Withdrawal", UUID.randomUUID().toString());
         System.out.println("Withdrawn");
     }
 
@@ -78,7 +78,7 @@ public class Main {
         String to=sc.nextLine().trim();
         System.out.println("Amount: ");
         Double amount=Double.valueOf(sc.nextLine().trim());
-        bs.transfer(from,to,amount,"Transfer");
+        bs.transfer(from,to,amount,"Transfer", UUID.randomUUID().toString());
 
     }
 
